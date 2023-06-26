@@ -64,17 +64,19 @@ class TAUConfig(object):
             parameter : value
         This function extracts the value as string and remove potential
         white spaces or comments (#). The separator is expected to be a
-        colon.
+        colon. If the entry occurs multiple times only the last entry of
+        the parameter file is returned.
 
         :param parameter: the parameter of which to extract the value
         :type pattern: str
         :return: extracted value or empty string
         :rtype: str
         """
+        parameter_value = ""
         for line in self._file_content:
             if parameter in line:
-                return line.split(CONFIG_SEP)[-1].split(COMMENT_CHAR)[0].strip()
-        return ""
+                parameter_value = line.split(CONFIG_SEP)[-1].split(COMMENT_CHAR)[0].strip()
+        return parameter_value
 
     def _gather_config(self):
         """Gather all required configuration values.
