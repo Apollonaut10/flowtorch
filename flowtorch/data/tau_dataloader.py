@@ -21,13 +21,15 @@ from .dataloader import Dataloader
 from .utils import check_list_or_str, check_and_standardize_path
 
 VOL_SOLUTION_NAME = ".pval.unsteady_"
+SURF_SOLUTION_NAME = ".surface.pval.unsteady_"
 PSOLUTION_POSTFIX = ".domain_"
 PMESH_NAME = "domain_{:s}_grid_1"
 PVERTEX_KEY = "pcoord"
 PWEIGHT_KEY = "pvolume"
 PADD_POINTS_KEY = "addpoint_idx"
 PGLOBAL_ID_KEY = "globalidx"
-VERTEX_KEYS = ("points_xc", "points_yc", "points_zc")
+VOL_VERTEX_KEYS = ("points_xc", "points_yc", "points_zc")
+SURF_VERTEX_KEYS = ("x", "y", "z")
 WEIGHT_KEY = "volume"
 
 COMMENT_CHAR = "#"
@@ -106,6 +108,7 @@ class TAUDataloader(Dataloader):
     - internal field solution, serial/reconstructed and distributed
     - mesh vertices, serial and distributed
     - cell volumes, serial (if present) and distributed
+    - interal surface solution, serial
 
     Examples
 
@@ -128,7 +131,7 @@ class TAUDataloader(Dataloader):
     """
 
     def __init__(self, parameter_file: str, distributed: bool = False,
-                 dtype: str = DEFAULT_DTYPE):
+                 dtype: str = DEFAULT_DTYPE, surface: bool = False):
         """Create loader instance from TAU parameter file.
 
         :param parameter_file: path to TAU simulation parameter file
@@ -142,6 +145,7 @@ class TAUDataloader(Dataloader):
         self._para = TAUConfig(parameter_file)
         self._distributed = distributed
         self._dtype = dtype
+        self._surface = surface
         self._time_iter = self._decompose_file_name()
         self._mesh_data = None
 
@@ -154,7 +158,10 @@ class TAUDataloader(Dataloader):
         :rtype: Dict[str, str]
         """
         base = join(self._para.path, self._para.config[SOLUTION_PREFIX_KEY])
-        base += VOL_SOLUTION_NAME
+        if self._surface:
+            base += SURF_SOLUTION_NAME
+        else:
+            base += VOL_SOLUTION_NAME
         suffix = f"{PSOLUTION_POSTFIX}0" if self._distributed else "e???"
         files = glob(f"{base}i=*t=*{suffix}")
         if len(files) < 1:
@@ -181,7 +188,10 @@ class TAUDataloader(Dataloader):
         """
         itr = self._time_iter[time]
         path = join(self._para.path, self._para.config[SOLUTION_PREFIX_KEY])
-        return f"{path}{VOL_SOLUTION_NAME}i={itr}_t={time}{suffix}"
+        if self._surface:
+            return f"{path}{SURF_SOLUTION_NAME}i={itr}_t={time}{suffix}"
+        else:
+            return f"{path}{VOL_SOLUTION_NAME}i={itr}_t={time}{suffix}"
 
     def _load_domain_mesh_data(self, pid: str) -> pt.Tensor:
         """Load vertices and volumes for a single processor domain.
@@ -219,6 +229,9 @@ class TAUDataloader(Dataloader):
         The mesh data is saved as class member `_mesh_data`. The tensor has the
         dimension n_points x 4; the first three columns correspond to the x/y/z
         coordinates, and the 4th column contains the volumes.
+
+        In case of TAU surface data, the vertices are extracted from the first
+        surface file.
         """
         if self._distributed:
             n = self._para.config[N_DOMAINS_KEY]
@@ -227,7 +240,12 @@ class TAUDataloader(Dataloader):
                 dim=0
             )
         else:
-            path = join(self._para.path, self._para.config[GRID_FILE_KEY])
+            if self._surface:
+                path = self._file_name(self.write_times[0])
+                VERTEX_KEYS = SURF_VERTEX_KEYS
+            else:
+                path = join(self._para.path, self._para.config[GRID_FILE_KEY])
+                VERTEX_KEYS = VOL_VERTEX_KEYS
             with Dataset(path) as data:
                 vertices = pt.stack(
                     [pt.tensor(data[key][:], dtype=self._dtype)
