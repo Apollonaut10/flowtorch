@@ -18,16 +18,17 @@ import torch as pt
 # flowtorch packages
 from flowtorch import DEFAULT_DTYPE
 from .dataloader import Dataloader
+from .tau_dataloader import TAUConfig
 from .utils import check_list_or_str, check_and_standardize_path
 
-VOL_SOLUTION_NAME = ".pval.unsteady_"
+SURF_SOLUTION_NAME = ".surface.pval.unsteady_"
 PSOLUTION_POSTFIX = ".domain_"
 PMESH_NAME = "domain_{:s}_grid_1"
 PVERTEX_KEY = "pcoord"
 PWEIGHT_KEY = "pvolume"
 PADD_POINTS_KEY = "addpoint_idx"
 PGLOBAL_ID_KEY = "globalidx"
-VERTEX_KEYS = ("points_xc", "points_yc", "points_zc")
+VERTEX_KEYS = ("x", "y", "z")
 WEIGHT_KEY = "volume"
 
 COMMENT_CHAR = "#"
@@ -37,75 +38,14 @@ GRID_FILE_KEY = "primary_grid"
 GRID_PREFIX_KEY = "grid_prefix"
 N_DOMAINS_KEY = "n_domains"
 
-
-class TAUConfig(object):
-    """Load and parse TAU parameter files.
-
-    The class does not parse the full content of the parameter file
-    but only content that is absolutely needed to load snapshot data.
-
-    """
-
-    def __init__(self, file_path: str):
-        """Create a `TauConfig` instance from the file path.
-
-        :param file_path: path to the parameter file
-        :type path: str
-        """
-        self._path, self._file_name = split(file_path)
-        with open(join(self._path, self._file_name), "r") as config:
-            self._file_content = config.readlines()
-        self._config = None
-
-    def _parse_config(self, parameter: str) -> str:
-        """Extract a value based on a given pattern.
-
-        Every line of the parameter file follows the structure:
-            parameter : value
-        This function extracts the value as string and remove potential
-        white spaces or comments (#). The separator is expected to be a
-        colon. If the entry occurs multiple times only the last entry of
-        the parameter file is returned.
-
-        :param parameter: the parameter of which to extract the value
-        :type pattern: str
-        :return: extracted value or empty string
-        :rtype: str
-        """
-        parameter_value = ""
-        for line in self._file_content:
-            if parameter in line:
-                parameter_value = line.split(CONFIG_SEP)[-1].split(COMMENT_CHAR)[0].strip()
-        return parameter_value
-
-    def _gather_config(self):
-        """Gather all required configuration values.
-        """
-        config = {}
-        config[SOLUTION_PREFIX_KEY] = self._parse_config("Output files prefix")
-        config[GRID_FILE_KEY] = self._parse_config("Primary grid filename")
-        config[GRID_PREFIX_KEY] = self._parse_config("Grid prefix")
-        config[N_DOMAINS_KEY] = int(self._parse_config("Number of domains"))
-        self._config = config
-
-    @property
-    def path(self) -> str:
-        return self._path
-
-    @property
-    def config(self) -> dict:
-        if self._config is None:
-            self._gather_config()
-        return self._config
-
-
-class TAUDataloader(Dataloader):
+class TAUSurfaceDataloader(Dataloader):
     """Load TAU simulation data.
 
     The loader is currently limited to read:
     - internal field solution, serial/reconstructed and distributed
     - mesh vertices, serial and distributed
     - cell volumes, serial (if present) and distributed
+    - interal surface solution, serial
 
     Examples
 
@@ -154,7 +94,7 @@ class TAUDataloader(Dataloader):
         :rtype: Dict[str, str]
         """
         base = join(self._para.path, self._para.config[SOLUTION_PREFIX_KEY])
-        base += VOL_SOLUTION_NAME
+        base += SURF_SOLUTION_NAME
         suffix = f"{PSOLUTION_POSTFIX}0" if self._distributed else "e???"
         files = glob(f"{base}i=*t=*{suffix}")
         if len(files) < 1:
@@ -181,8 +121,8 @@ class TAUDataloader(Dataloader):
         """
         itr = self._time_iter[time]
         path = join(self._para.path, self._para.config[SOLUTION_PREFIX_KEY])
-        return f"{path}{VOL_SOLUTION_NAME}i={itr}_t={time}{suffix}"
-
+        return f"{path}{SURF_SOLUTION_NAME}i={itr}_t={time}{suffix}"
+        
     def _load_domain_mesh_data(self, pid: str) -> pt.Tensor:
         """Load vertices and volumes for a single processor domain.
 
@@ -219,6 +159,9 @@ class TAUDataloader(Dataloader):
         The mesh data is saved as class member `_mesh_data`. The tensor has the
         dimension n_points x 4; the first three columns correspond to the x/y/z
         coordinates, and the 4th column contains the volumes.
+
+        In case of TAU surface data, the vertices are extracted from the first
+        surface file.
         """
         if self._distributed:
             n = self._para.config[N_DOMAINS_KEY]
@@ -227,7 +170,7 @@ class TAUDataloader(Dataloader):
                 dim=0
             )
         else:
-            path = join(self._para.path, self._para.config[GRID_FILE_KEY])
+            path = self._file_name(self.write_times[0])
             with Dataset(path) as data:
                 vertices = pt.stack(
                     [pt.tensor(data[key][:], dtype=self._dtype)
