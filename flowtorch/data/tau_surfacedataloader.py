@@ -42,9 +42,7 @@ class TAUSurfaceDataloader(Dataloader):
     """Load TAU simulation data.
 
     The loader is currently limited to read:
-    - internal field solution, serial/reconstructed and distributed
-    - mesh vertices, serial and distributed
-    - cell volumes, serial (if present) and distributed
+    - mesh vertices, serial 
     - interal surface solution, serial
 
     Examples
