@@ -143,9 +143,19 @@ class TecplotDataloader(Dataloader):
         field_names = self.field_names[self.write_times[0]]
         reader.PointArrayStatus = field_names
         reader = sm.Fetch(reader)
-        wrapper = dsa.WrapDataObject(reader.GetBlock(0).GetBlock(
-            self.zone_names.index(self.zone)
-        ))
+        # Get index of matching zone_name
+        # 1. extract the zone names from the current snapshot
+        root_block = reader.GetBlock(0)
+        snapshot_zone_names = [
+                self._parse_block_name(
+                    str(root_block.GetMetaData(i))
+                ) for i in range(root_block.GetNumberOfBlocks())
+            ]
+        # 2. match the zone names to the current zone (self.zone) and indentify 
+        # the index position
+        zone_index = snapshot_zone_names.index(self.zone)
+        # 3. load the data from the corresponding index
+        wrapper = dsa.WrapDataObject(reader.GetBlock(0).GetBlock(zone_index))
         return pt.from_numpy(wrapper.PointData[field_names.index(field_name)])
 
     def _load_multiple_snapshots(self, field_name: str, times: List[str]) -> pt.Tensor:
