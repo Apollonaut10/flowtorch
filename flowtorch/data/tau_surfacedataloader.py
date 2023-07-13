@@ -15,6 +15,7 @@ from typing import List, Dict, Tuple, Union, Set
 # third party packages
 from netCDF4 import Dataset
 import torch as pt
+import numpy as np
 # flowtorch packages
 from flowtorch import DEFAULT_DTYPE
 from .dataloader import Dataloader
@@ -28,7 +29,7 @@ PVERTEX_KEY = "pcoord"
 PWEIGHT_KEY = "pvolume"
 PADD_POINTS_KEY = "addpoint_idx"
 PGLOBAL_ID_KEY = "globalidx"
-VERTEX_KEYS = ("x", "y", "z")
+VERTEX_KEYS = ("points_xc", "points_yc", "points_zc")
 WEIGHT_KEY = "volume"
 
 COMMENT_CHAR = "#"
@@ -82,6 +83,9 @@ class TAUSurfaceDataloader(Dataloader):
         self._dtype = dtype
         self._time_iter = self._decompose_file_name()
         self._mesh_data = None
+        self._zone_names = None
+        self._zone = self.zone_names[0]
+        self._global_id_of_zone_points = None
 
     def _decompose_file_name(self) -> Dict[str, str]:
         """Extract write time and iteration from file name.
@@ -131,35 +135,15 @@ class TAUSurfaceDataloader(Dataloader):
             coordinates of the vertices (x, y, z) and the cell volumes
         :rtype: pt.Tensor
         """
-        prefix = self._para.config[GRID_PREFIX_KEY]
-        name = PMESH_NAME.format(pid)
-        if not (prefix == "(none)"):
-            name = f"{prefix}_{name}"
-        path = join(self._para.path, name)
-        with Dataset(path) as data:
-            vertices = pt.tensor(data[PVERTEX_KEY][:], dtype=self._dtype)
-            volumes = pt.tensor(data[PWEIGHT_KEY][:], dtype=self._dtype)
-            global_ids = pt.tensor(data[PGLOBAL_ID_KEY][:], dtype=pt.int64)
-            n_add_points = data[PADD_POINTS_KEY].shape[0]
-
-        n_points = volumes.shape[0] - n_add_points
-        data = pt.zeros((n_points, 4), dtype=self._dtype)
-        sorting = pt.argsort(global_ids[:n_points])
-        data[:, 0] = vertices[:n_points, 0][sorting]
-        data[:, 1] = vertices[:n_points, 1][sorting]
-        data[:, 2] = vertices[:n_points, 2][sorting]
-        data[:, 3] = volumes[:n_points][sorting]
-        return data
+        print("self._load_domain_mesh_data() Not implemented!")
+        return 0
 
     def _load_mesh_data(self):
-        """Load mesh vertices and cell volumes.
+        """Load mesh vertices and global_id for the current zone.
 
         The mesh data is saved as class member `_mesh_data`. The tensor has the
-        dimension n_points x 4; the first three columns correspond to the x/y/z
-        coordinates, and the 4th column contains the volumes.
-
-        In case of TAU surface data, the vertices are extracted from the first
-        surface file.
+        dimension n_points x 3; the first three columns correspond to the x/y/z
+        coordinates.
         """
         if self._distributed:
             n = self._para.config[N_DOMAINS_KEY]
@@ -168,8 +152,18 @@ class TAUSurfaceDataloader(Dataloader):
                 dim=0
             )
         else:
-            path = self._file_name(self.write_times[0])
+            path = join(self._para.path, self._para.config[GRID_FILE_KEY])
             with Dataset(path) as data:
+                # Get info from the netcdf4 mesh file
+                boundary_markers = pt.tensor(data.variables["boundarymarker_of_surfaces"][:], dtype=int)
+                try:
+                    surface_tris = pt.tensor(data.variables["points_of_surfacetriangles"][:], dtype=int)
+                except KeyError:
+                    pass
+                try:
+                    surface_quads = pt.tensor(data.variables["points_of_surfacequadrilaterals"][:], dtype=int)
+                except KeyError:
+                    pass
                 vertices = pt.stack(
                     [pt.tensor(data[key][:], dtype=self._dtype)
                      for key in VERTEX_KEYS],
@@ -182,7 +176,31 @@ class TAUSurfaceDataloader(Dataloader):
                     print(
                         f"Warning: could not find cell volumes in file {path}")
                     weights = pt.ones(vertices.shape[0], dtype=self._dtype)
-            self._mesh_data = pt.cat((vertices, weights.unsqueeze(-1)), dim=-1)
+            # Define the marker id based on the zone
+            # TODO: Zone selection based on names and translation to marker ID's
+            zone_marker_id = int(self._zone)
+            # Extract the global ID's of selected points:
+            if surface_quads:
+                # Expand surface_tris by 4th entry with 'nan' so the tensor can be added together
+                dummy_tensor = pt.zeros(size=(len(surface_tris),1))
+                dummy_tensor[dummy_tensor==0] = float('nan')
+                surface_tris_expanded = pt.cat((surface_tris,dummy_tensor),1)
+                # join tensors of tris and quads
+                points_of_tris_and_quads = pt.cat((surface_tris_expanded, surface_quads))
+                # Extract global ID's of unique points
+                global_id_of_marker_points = np.unique(points_of_tris_and_quads[indices_of_marker].flatten())
+                # Drop nan and convert to int again
+                global_id_of_marker_points = global_id_of_marker_points[~np.isnan(global_id_of_marker_points)].astype(int)
+            elif surface_tris:
+                # if only triangles are present in the mesh the extraction is easy
+                indices_of_marker = np.where((boundary_markers == zone_marker_id))
+                global_id_of_marker_points = np.unique(p_o_s[indices_of_marker].flatten())
+            else:
+                print("Error loading surface data. No triangles or quadrilaterals found in the mesh: {}".format(path))
+            vertices = vertices[global_id_of_marker_points]
+            weights = weights.unsqueeze(-1)[global_id_of_marker_points]
+            self._global_id_of_zone_points = global_id_of_marker_points
+            self._mesh_data = pt.cat((vertices, weights), dim=-1)
 
     def _load_single_snapshot(self, field_name: str, time: str) -> pt.Tensor:
         """Load a single snapshot of a single field from the netCDF4 file(s).
@@ -209,7 +227,7 @@ class TAUSurfaceDataloader(Dataloader):
             with Dataset(path) as data:
                 field = pt.tensor(
                     data.variables[field_name][:], dtype=self._dtype)
-        return field
+        return field[self._global_id_of_zone_points]
 
     def load_snapshot(self, field_name: Union[List[str], str],
                       time: Union[List[str], str]) -> Union[List[pt.Tensor], pt.Tensor]:
@@ -281,3 +299,51 @@ class TAUSurfaceDataloader(Dataloader):
         if self._mesh_data is None:
             self._load_mesh_data()
         return self._mesh_data[:, 3]
+
+    @property
+    def zone_names(self) -> List[str]:
+        """Names of available blocks/zones.
+
+        Currently only extracts the marker ID's from the the grid file.
+        TODO: Extract names from para file and match them to the marker ID's.
+
+        :return: block/zone names
+        :rtype: List[str]
+        """
+        if self._zone_names is None:
+            mesh_file = join(self._para.path, self._para.config[GRID_FILE_KEY])
+            with Dataset(mesh_file) as data:
+                self._zone_names = [ 
+                    str(m) for m in data.variables['marker'][:] 
+                ]
+        return self._zone_names
+
+    @property
+    def zone(self) -> str:
+        """Currently selected block/zone.
+
+        :return: block/zone name
+        :rtype: str
+        """
+        return self._zone
+
+    @zone.setter
+    def zone(self, value: str):
+        """Select active block/zone.
+
+        The selected block remains unchanged if an invalid
+        block name is passed
+
+        :param value: name of block to select
+        :type value: str
+        """
+        if value in self.zone_names:
+            self._zone = value
+            self._global_id_of_zone_points = self.get_global_id_of_zone_points(value)
+        else:
+            print(f"{value} not found. Available zones are:")
+            print(self.zone_names)
+    
+    def get_global_id_of_zone_points(self, marker: str) -> pt.Tensor:
+        
+        return 0
