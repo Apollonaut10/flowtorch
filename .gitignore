@@ -12,5 +12,6 @@ build
 dist
 flowTorch.egg-info
 datasets
+DATASETS
 datasets_minimal
 compile_article
