@@ -96,37 +96,38 @@ class TAUConfig(object):
         Returns a dictionary in the form:
             bmap[zone_name]=[marker_id_1, marker_id_2, ...]
 
-        TODO: Implement for boundary mapping in separate bmap file and not in para file.
         """
         bmap = {}
         if self._config[BMAP_FILE_KEY] == "(thisfile)":
-            for i, line in enumerate(self._file_content):
-                if "Markers:" in line:
-                    markers = [int(m) for m in line.split(CONFIG_SEP)[-1].split(COMMENT_CHAR)[0].split(",")]
-                    j=i
-                    block_end_found=False
-                    write_surface_data=False
-                    bmap_name=""
-                    try:
-                        while not block_end_found:
-                            j+=1
-                            line_content = self._file_content[j]
-                            if "Write surface data (0/1)" in line_content:
-                                write_surface_data=True
-                            elif "Name" in line_content:
-                                bmap_name=line_content.split(CONFIG_SEP)[-1].split(COMMENT_CHAR)[0].strip()
-                            elif "block end" in line_content:
-                                block_end_found=True
-                            else:
-                                continue
-                    except IndexError:
-                        print("Could not find 'block end' keyword while parsing the bmap file for Marker {}".format(line.split(":")[-1]))
-                    if block_end_found and write_surface_data:
-                        bmap[bmap_name]=markers
-            self._bmap = bmap
+            file_content = self._file_content
         else:
-            print("Parsing of boundary mapping in separate file currently not implemented!")
-            self._bmap = bmap
+            with open(join(self._path, self._config[BMAP_FILE_KEY]), "r") as bmap_file:
+                file_content = bmap_file.readlines()
+        for i, line in enumerate(file_content):
+            if "Markers:" in line:
+                markers = [int(m) for m in line.split(CONFIG_SEP)[-1].split(COMMENT_CHAR)[0].split(",")]
+                j=i
+                block_end_found=False
+                write_surface_data=False
+                bmap_name=""
+                try:
+                    while not block_end_found:
+                        j+=1
+                        line_content = file_content[j]
+                        if "Write surface data (0/1)" in line_content:
+                            write_surface_data=True
+                        elif "Name" in line_content:
+                            bmap_name=line_content.split(CONFIG_SEP)[-1].split(COMMENT_CHAR)[0].strip()
+                        elif "block end" in line_content:
+                            block_end_found=True
+                        else:
+                            continue
+                except IndexError:
+                    print("Could not find 'block end' keyword while parsing the bmap file for Marker {}".format(line.split(":")[-1]))
+                if block_end_found and write_surface_data:
+                    bmap[bmap_name]=markers
+        self._bmap = bmap
+
 
     @property
     def path(self) -> str:
