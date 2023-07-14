@@ -79,6 +79,7 @@ class TAUSurfaceDataloader(Dataloader):
         :type dtype: str, optional
         """
         self._para = TAUConfig(parameter_file)
+        self._para._parse_bmap()
         self._distributed = distributed
         self._dtype = dtype
         self._time_iter = self._decompose_file_name()
@@ -297,8 +298,12 @@ class TAUSurfaceDataloader(Dataloader):
             self._field_names[time] = []
             with Dataset(self._file_name(time, suffix)) as data:
                 for key in data.variables.keys():
+                    """
                     if data[key].shape[0] == n_points:
                         self._field_names[time].append(key)
+                    """
+                    # Dirty workaround: Give all keys and let the user be smart.
+                    self._field_names[time].append(key)
         return self._field_names
 
     @property
@@ -320,6 +325,7 @@ class TAUSurfaceDataloader(Dataloader):
 
         Currently only extracts the marker ID's from the the grid file.
         TODO: Extract names from para file and match them to the marker ID's.
+        DANGER: This gives all marker, even those for which no surface solution is written!
 
         :return: block/zone names
         :rtype: List[str]
