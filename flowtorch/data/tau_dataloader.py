@@ -91,7 +91,7 @@ class TAUConfig(object):
         self._config = config
 
     def _parse_bmap(self) -> dict:
-        """Only required by the surface dataloder. Parse the bmap to get information
+        """Only required by the TAUSurfaceDataloader. Parse the bmap to get information
         which boundary markers are actually written to file and get the zone names.
         Returns a dictionary in the form:
             bmap[zone_name]=[marker_id_1, marker_id_2, ...]
@@ -123,7 +123,7 @@ class TAUConfig(object):
                         else:
                             continue
                 except IndexError:
-                    print("Could not find 'block end' keyword while parsing the bmap file for Marker {}".format(line.split(":")[-1]))
+                    print("Could not find 'block end' keyword while parsing the bmap file for {}".format(line))
                 if block_end_found and write_surface_data:
                     bmap[bmap_name]=markers
         self._bmap = bmap

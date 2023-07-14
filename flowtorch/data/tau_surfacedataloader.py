@@ -50,19 +50,14 @@ class TAUSurfaceDataloader(Dataloader):
 
     >>> from os.path import join
     >>> from flowtorch import DATASETS
-    >>> from flowtorch.data import TAUDataloader
-    >>> path = DATASETS["tau_backward_facing_step"]
-    >>> loader = TAUDataloader(join(path, "simulation.para"))
+    >>> from flowtorch.data import TAUSurfaceDataloader
+    >>> path = DATASETS["tau_surface_import"]
+    >>> loader = TAUDataloader(join(path, "tau_euler.para"))
     >>> times = loader.write_times
     >>> fields = loader.field_names[times[0]]
     >>> fields
-    ['density', 'x_velocity', 'y_velocity', ...]
-    >>> density = loader.load_snapshot("density", times)
-
-    To load distributed simulation data, set `distributed=True`
-    >>> path = DATASETS["tau_cylinder_2D"]
-    >>> loader = TAUDataloader(join(path, "simulation.para"), distributed=True)
-    >>> vertices = loader.vertices
+    ['cp', 'x_velocity', 'y_velocity', ...]
+    >>> cp = loader.load_snapshot("cp", times)
 
     """
 
@@ -136,15 +131,15 @@ class TAUSurfaceDataloader(Dataloader):
             coordinates of the vertices (x, y, z) and the cell volumes
         :rtype: pt.Tensor
         """
-        print("self._load_domain_mesh_data() not implemented!")
+        print("self._load_domain_mesh_data() not implemented yet!")
         return 0
 
     def _load_mesh_data(self):
         """Load mesh vertices and global_id for the current zone.
 
         The mesh data is saved as class member `_mesh_data`. The tensor has the
-        dimension n_points x 3; the first three columns correspond to the x/y/z
-        coordinates.
+        dimension n_points x 4; the first three columns correspond to the x/y/z
+        coordinates. The 4th column is usually filled with ones for the weights.
         """
         if self._distributed:
             n = self._para.config[N_DOMAINS_KEY]
@@ -319,10 +314,6 @@ class TAUSurfaceDataloader(Dataloader):
     @property
     def zone_names(self) -> List[str]:
         """Names of available blocks/zones.
-
-        Currently only extracts the marker ID's from the the grid file.
-        TODO: Extract names from para file and match them to the marker ID's.
-        DANGER: This gives all marker, even those for which no surface solution is written!
 
         :return: block/zone names
         :rtype: List[str]
