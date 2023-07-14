@@ -79,10 +79,10 @@ class TAUSurfaceDataloader(Dataloader):
         :type dtype: str, optional
         """
         self._para = TAUConfig(parameter_file)
-        self._para._parse_bmap()
         self._distributed = distributed
         self._dtype = dtype
         self._time_iter = self._decompose_file_name()
+        self._para._parse_bmap()
         self._mesh_data = None
         self._zone_names = None
         self._zone = self.zone_names[0]
@@ -184,11 +184,8 @@ class TAUSurfaceDataloader(Dataloader):
                     weights = pt.ones(vertices.shape[0], dtype=self._dtype)
 
             # Define the marker id based on the zone
-            # TODO: Zone selection based on names and translation to marker ID's. Therefore we have to parse the bmap
-            #       section of the tau para file or the bmap file itself.
-            for zone in self.zone_names:
-                zone_marker_id = int(zone)
-                indices_of_marker = np.where((boundary_markers == zone_marker_id))
+            for zone_name, zone_markers in self._para._bmap.items():
+                indices_of_marker = np.where(np.isin(boundary_markers, zone_markers))
                 # Extract the global ID's of selected points:
                 if surface_quads is not None and surface_tris is not None:
                     # Expand surface_tris by 4th entry with 'nan' so the tensor can be added together
@@ -209,7 +206,7 @@ class TAUSurfaceDataloader(Dataloader):
                     global_id_of_marker_points = np.unique(surface_quads[indices_of_marker].flatten())
                 else:
                     print("Error loading surface data. No triangles or quadrilaterals found in the mesh: {}".format(path))
-                self._global_id_of_zone_points[zone] = global_id_of_marker_points
+                self._global_id_of_zone_points[zone_name] = global_id_of_marker_points
 
             self._mesh_data = pt.cat((vertices, weights.unsqueeze(-1)), dim=-1)
 
@@ -291,8 +288,8 @@ class TAUSurfaceDataloader(Dataloader):
         else:
             n_points = self._mesh_data.shape[0]
             suffix = ""
-        # This does currently not work as self._mesh_data also contains the farfield
-        # for which not data is written out and therefore the length of the vectors do not match!
+        # This does currently not work as self._mesh_data also contains all surfaces for which data 
+        # is not necessarily written out and therefore the length of the vectors may not match!
         # What's the idea behind this anyway?
         for time in self.write_times:
             self._field_names[time] = []
@@ -331,11 +328,7 @@ class TAUSurfaceDataloader(Dataloader):
         :rtype: List[str]
         """
         if self._zone_names is None:
-            mesh_file = join(self._para.path, self._para.config[GRID_FILE_KEY])
-            with Dataset(mesh_file) as data:
-                self._zone_names = [ 
-                    str(m) for m in data.variables['marker'][:] 
-                ]
+            self._zone_names = list(self._para._bmap.keys())
         return self._zone_names
 
     @property
