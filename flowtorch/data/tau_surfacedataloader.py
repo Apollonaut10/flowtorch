@@ -152,8 +152,7 @@ class TAUSurfaceDataloader(Dataloader):
 
             with Dataset(path) as data:
                 # Get info from the netcdf4 mesh file
-                # TODO: The try/except statement has to be fixed! In case of only tris or only quads
-                #       in the mesh the calculation of 'global_id_of_surface_points' will fail!
+                # TODO: This is very cumbersome. Make it cleaner.
                 boundary_markers = pt.tensor(data.variables["boundarymarker_of_surfaces"][:], dtype=int)
                 try:
                     surface_tris = pt.tensor(data.variables["points_of_surfacetriangles"][:], dtype=int)
@@ -164,7 +163,14 @@ class TAUSurfaceDataloader(Dataloader):
                 except KeyError:
                     pass
                 # Make sure to load only surface data and not the entire mesh as these vectors get big!
-                global_id_of_surface_points = np.unique(pt.cat((surface_tris.flatten(), surface_quads.flatten())))
+                if surface_quads is not None and surface_tris is not None:
+                    global_id_of_surface_points = np.unique(pt.cat((surface_tris.flatten(), surface_quads.flatten())))
+                elif surface_tris is not None:
+                    global_id_of_surface_points = np.unique(surface_tris.flatten())
+                elif surface_quads is not None:
+                    global_id_of_surface_points = np.unique(surface_quads.flatten())
+                else:
+                    print("Error loading surface data. No triangles or quadrilaterals found in the mesh: {}".format(path))
                 vertices = pt.stack(
                     [pt.tensor(data[key][global_id_of_surface_points], dtype=self._dtype)
                      for key in VERTEX_KEYS],
@@ -182,6 +188,7 @@ class TAUSurfaceDataloader(Dataloader):
             for zone_name, zone_markers in self._para._bmap.items():
                 indices_of_marker = np.where(np.isin(boundary_markers, zone_markers))
                 # Extract the global ID's of selected points:
+                # TODO: This is very cumbersome. See above.
                 if surface_quads is not None and surface_tris is not None:
                     # Expand surface_tris by 4th entry with 'nan' so the tensor can be added together
                     dummy_tensor = pt.zeros(size=(len(surface_tris),1))
