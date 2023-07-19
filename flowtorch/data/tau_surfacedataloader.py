@@ -149,54 +149,46 @@ class TAUSurfaceDataloader(Dataloader):
             )
         else:
             path = join(self._para.path, self._para.config[GRID_FILE_KEY])
-
+            # Get surface-mesh information from the netcdf4 mesh file
             with Dataset(path) as data:
-                # Get info from the netcdf4 mesh file
-                # TODO: This is very cumbersome. Make it cleaner.
+                # boundary_markers : list associating the marker values with surface element index positions
+                # length : number of surface elements in the mesh
+                # example:   boundary_markers = [1,1,1,2,2,3,3,3]
+                #            First three surface elements in the mesh belong to marker 1, 
+                #            elements 4 and 5 belong to marker 2 and so on.
                 boundary_markers = pt.tensor(data.variables["boundarymarker_of_surfaces"][:], dtype=int)
                 try:
+                    # surface_tris : list containing the definition of surface triangles
+                    # length : number of triangles in the mesh x 3
+                    # example:   surface_tris = [[5,2,1],
+                    #                            [1,4,6],
+                    #                            [2,3,5]]
+                    #            First triangle is defined by points 5, 2 and 1.
+                    #            Second triangle is defined by points 1, 4, and 6 and so on.
                     surface_tris = pt.tensor(data.variables["points_of_surfacetriangles"][:], dtype=int)
                 except KeyError:
                     pass
                 try:
+                    # surface_quads : list containing the definition of surface quadrilaterals
+                    # length : number of quads in the mesh x 4
+                    # example: see surface_tris
                     surface_quads = pt.tensor(data.variables["points_of_surfacequadrilaterals"][:], dtype=int)
                 except KeyError:
                     pass
-                # Make sure to load only surface data and not the entire mesh as these vectors get big!
-                if surface_quads is not None and surface_tris is not None:
-                    global_id_of_surface_points = np.unique(pt.cat((surface_tris.flatten(), surface_quads.flatten())))
-                elif surface_tris is not None:
-                    global_id_of_surface_points = np.unique(surface_tris.flatten())
-                elif surface_quads is not None:
-                    global_id_of_surface_points = np.unique(surface_quads.flatten())
-                else:
-                    print("Error loading surface data. No triangles or quadrilaterals found in the mesh: {}".format(path))
-                vertices = pt.stack(
-                    [pt.tensor(data[key][global_id_of_surface_points], dtype=self._dtype)
-                     for key in VERTEX_KEYS],
-                    dim=-1
-                )
-                if WEIGHT_KEY in data.variables.keys():
-                    weights = pt.tensor(
-                        data.variables[WEIGHT_KEY][global_id_of_surface_points], dtype=self._dtype)
-                else:
-                    print(
-                        f"Warning: could not find cell volumes in file {path}")
-                    weights = pt.ones(vertices.shape[0], dtype=self._dtype)
 
             # Define the marker id based on the zone
             for zone_name, zone_markers in self._para._bmap.items():
                 indices_of_marker = np.where(np.isin(boundary_markers, zone_markers))
-                # Extract the global ID's of selected points:
+                # Extract the global ID's of selected points (global ID is the index position of a point in the mesh file):
                 # TODO: This is very cumbersome. See above.
                 if surface_quads is not None and surface_tris is not None:
-                    # Expand surface_tris by 4th entry with 'nan' so the tensor can be added together
+                    # Expand surface_tris by 4th entry with 'nan' so the tensors of tris and quads can be added together
                     dummy_tensor = pt.zeros(size=(len(surface_tris),1))
                     dummy_tensor[dummy_tensor==0] = float('nan')
                     surface_tris_expanded = pt.cat((surface_tris,dummy_tensor),1)
                     # join tensors of tris and quads
                     points_of_tris_and_quads = pt.cat((surface_tris_expanded, surface_quads))
-                    # Extract global ID's of unique points
+                    # Extract indices of surface points in the mesh file
                     global_id_of_marker_points = np.unique(points_of_tris_and_quads[indices_of_marker].flatten())
                     # Drop nan and convert to int again
                     global_id_of_marker_points = global_id_of_marker_points[~np.isnan(global_id_of_marker_points)].astype(int)
@@ -210,8 +202,6 @@ class TAUSurfaceDataloader(Dataloader):
                     print("Error loading surface data. No triangles or quadrilaterals found in the mesh: {}".format(path))
                 self._global_id_of_zone_points[zone_name] = global_id_of_marker_points
 
-            self._mesh_data = pt.cat((vertices, weights.unsqueeze(-1)), dim=-1)
-
     def _load_single_snapshot(self, field_name: str, time: str) -> pt.Tensor:
         """Load a single snapshot of a single field from the netCDF4 file(s).
 
@@ -223,20 +213,17 @@ class TAUSurfaceDataloader(Dataloader):
         :rtype: pt.Tensor
         """
         if self._distributed:
-            field = []
-            for pid in range(self._para.config[N_DOMAINS_KEY]):
-                path = self._file_name(time, f".domain_{pid}")
-                with Dataset(path) as data:
-                    field.append(
-                        pt.tensor(
-                            data.variables[field_name][:], dtype=self._dtype)
-                    )
-            return pt.cat(field, dim=0)
+            print("Loading of distributed snapshots is not implemented!")
         else:
             path = self._file_name(time)
             with Dataset(path) as data:
+                # Get the global ids from the surface datafile.
+                global_id = data.variables["global_id"]
+                # Extract the index positions of the points of the current zone in the surface datafile
+                index_position_in_surf_data = np.isin(global_id, self._global_id_of_zone_points[self._zone])
+                # Get the data
                 field = pt.tensor(
-                    data.variables[field_name][self._global_id_of_zone_points[self._zone]], dtype=self._dtype)
+                    data.variables[field_name][index_position_in_surf_data], dtype=self._dtype)
         return field
 
     def load_snapshot(self, field_name: Union[List[str], str],
@@ -283,40 +270,36 @@ class TAUSurfaceDataloader(Dataloader):
             available solution fields as value
         :rtype: Dict[str, List[str]]
         """
+        suffix = ""
         self._field_names = {}
-        if self._distributed:
-            n_points = self._load_domain_mesh_data("0").shape[0]
-            suffix = ".domain_0"
-        else:
-            n_points = self._mesh_data.shape[0]
-            suffix = ""
-        # This does currently not work as self._mesh_data also contains all surfaces for which data 
-        # is not necessarily written out and therefore the length of the vectors may not match!
-        # What's the idea behind this anyway?
         for time in self.write_times:
             self._field_names[time] = []
             with Dataset(self._file_name(time, suffix)) as data:
                 for key in data.variables.keys():
-                    """
-                    if data[key].shape[0] == n_points:
-                        self._field_names[time].append(key)
-                    """
-                    # Dirty workaround: Give all keys and let the user be smart.
+                    # Dirty workaround: Give all keys and let the user be smart. Works okay for the example dataset.
                     self._field_names[time].append(key)
         return self._field_names
 
     @property
     def vertices(self) -> pt.Tensor:
-        if self._mesh_data is None:
+        # Use _load_mesh_data to fill the dict if not already done.
+        if not self._global_id_of_zone_points:
             self._load_mesh_data()
-        # I do not understand it, but it works this way!?
-        return self._mesh_data[:, :3][self._global_id_of_zone_points[self._zone]]
+        path = join(self._para.path, self._para.config[GRID_FILE_KEY])
+        with Dataset(path) as data:
+            # Get the vertices of the points of the current zone
+            vertices = pt.stack(
+                    [pt.tensor(data[key][self._global_id_of_zone_points[self._zone]], dtype=self._dtype)
+                     for key in VERTEX_KEYS],
+                    dim=-1
+                )
+        return vertices
 
     @property
     def weights(self) -> pt.Tensor:
-        if self._mesh_data is None:
-            self._load_mesh_data()
-        return self._mesh_data[:, 3][self._global_id_of_zone_points[self._zone]]
+        # This would require an additional opening of the mesh file. Workaround?
+        weights = pt.ones(self.vertices.shape[0], dtype=self._dtype)
+        return weights
 
     @property
     def zone_names(self) -> List[str]:
