@@ -98,12 +98,15 @@ class TAUConfig(object):
 
         """
         bmap = {}
+        # If the bmap information is included in the parafile this is defined by this
         if self._config[BMAP_FILE_KEY] == "(thisfile)":
             file_content = self._file_content
+        # Load the data from a separate bmap file if present
         else:
             with open(join(self._path, self._config[BMAP_FILE_KEY]), "r") as bmap_file:
                 file_content = bmap_file.readlines()
         for i, line in enumerate(file_content):
+            # Assume that each bmap block starts with the keyword "Markers:"
             if "Markers:" in line:
                 markers = [int(m) for m in line.split(CONFIG_SEP)[-1].split(COMMENT_CHAR)[0].split(",")]
                 j=i
@@ -111,6 +114,7 @@ class TAUConfig(object):
                 write_surface_data=False
                 bmap_name=""
                 try:
+                    # Look for other required keywords in the following lines until "block end" is found
                     while not block_end_found:
                         j+=1
                         line_content = file_content[j]
@@ -124,6 +128,7 @@ class TAUConfig(object):
                             continue
                 except IndexError:
                     print("Could not find 'block end' keyword while parsing the bmap file for {}".format(line))
+                # Only store the mapping if it is complete
                 if block_end_found and write_surface_data:
                     bmap[bmap_name]=markers
         self._bmap = bmap
