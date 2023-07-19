@@ -162,6 +162,7 @@ class TAUSurfaceDataloader(Dataloader):
                     surface_quads = pt.tensor(data.variables["points_of_surfacequadrilaterals"][:], dtype=int)
                 except KeyError:
                     pass
+                """
                 # Make sure to load only surface data and not the entire mesh as these vectors get big!
                 if surface_quads is not None and surface_tris is not None:
                     global_id_of_surface_points = np.unique(pt.cat((surface_tris.flatten(), surface_quads.flatten())))
@@ -183,6 +184,7 @@ class TAUSurfaceDataloader(Dataloader):
                     print(
                         f"Warning: could not find cell volumes in file {path}")
                     weights = pt.ones(vertices.shape[0], dtype=self._dtype)
+                """
 
             # Define the marker id based on the zone
             for zone_name, zone_markers in self._para._bmap.items():
@@ -210,7 +212,7 @@ class TAUSurfaceDataloader(Dataloader):
                     print("Error loading surface data. No triangles or quadrilaterals found in the mesh: {}".format(path))
                 self._global_id_of_zone_points[zone_name] = global_id_of_marker_points
 
-            self._mesh_data = pt.cat((vertices, weights.unsqueeze(-1)), dim=-1)
+            #self._mesh_data = pt.cat((vertices, weights.unsqueeze(-1)), dim=-1)
 
     def _load_single_snapshot(self, field_name: str, time: str) -> pt.Tensor:
         """Load a single snapshot of a single field from the netCDF4 file(s).
@@ -235,8 +237,10 @@ class TAUSurfaceDataloader(Dataloader):
         else:
             path = self._file_name(time)
             with Dataset(path) as data:
+                global_ids = data.variables["global_id"]
+                index_position_in_surf_data = np.isin(global_ids,self._global_id_of_zone_points[self._zone])
                 field = pt.tensor(
-                    data.variables[field_name][self._global_id_of_zone_points[self._zone]], dtype=self._dtype)
+                    data.variables[field_name][index_position_in_surf_data], dtype=self._dtype)
         return field
 
     def load_snapshot(self, field_name: Union[List[str], str],
@@ -288,7 +292,7 @@ class TAUSurfaceDataloader(Dataloader):
             n_points = self._load_domain_mesh_data("0").shape[0]
             suffix = ".domain_0"
         else:
-            n_points = self._mesh_data.shape[0]
+            #n_points = self._mesh_data.shape[0]
             suffix = ""
         # This does currently not work as self._mesh_data also contains all surfaces for which data 
         # is not necessarily written out and therefore the length of the vectors may not match!
@@ -307,16 +311,22 @@ class TAUSurfaceDataloader(Dataloader):
 
     @property
     def vertices(self) -> pt.Tensor:
-        if self._mesh_data is None:
+        if not self._global_id_of_zone_points:
             self._load_mesh_data()
-        # I do not understand it, but it works this way!?
-        return self._mesh_data[:, :3][self._global_id_of_zone_points[self._zone]]
+        path = join(self._para.path, self._para.config[GRID_FILE_KEY])
+        with Dataset(path) as data:
+            vertices = pt.stack(
+                    [pt.tensor(data[key][self._global_id_of_zone_points[self._zone]], dtype=self._dtype)
+                     for key in VERTEX_KEYS],
+                    dim=-1
+                )
+        return vertices
 
     @property
     def weights(self) -> pt.Tensor:
-        if self._mesh_data is None:
-            self._load_mesh_data()
-        return self._mesh_data[:, 3][self._global_id_of_zone_points[self._zone]]
+        # This would require an additional opening of the mesh file. Fix it!
+        weights = pt.ones(self.vertices.shape[0], dtype=self._dtype)
+        return weights
 
     @property
     def zone_names(self) -> List[str]:
