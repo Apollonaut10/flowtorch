@@ -223,8 +223,9 @@ class TAUSurfaceDataloader(Dataloader):
                 index_position_in_surf_data = np.isin(global_id, self._global_id_of_zone_points[self._zone])
                 # Get the data
                 field = pt.tensor(
-                    data.variables[field_name][index_position_in_surf_data], dtype=self._dtype)
-        return field
+                    data.variables[field_name][:], dtype=self._dtype)
+
+        return field[index_position_in_surf_data]
 
     def load_snapshot(self, field_name: Union[List[str], str],
                       time: Union[List[str], str]) -> Union[List[pt.Tensor], pt.Tensor]:
@@ -289,11 +290,11 @@ class TAUSurfaceDataloader(Dataloader):
         with Dataset(path) as data:
             # Get the vertices of the points of the current zone
             vertices = pt.stack(
-                    [pt.tensor(data[key][self._global_id_of_zone_points[self._zone]], dtype=self._dtype)
+                    [pt.tensor(data[key][:], dtype=self._dtype)
                      for key in VERTEX_KEYS],
                     dim=-1
                 )
-        return vertices
+        return vertices[self._global_id_of_zone_points[self._zone]]
 
     @property
     def weights(self) -> pt.Tensor:
