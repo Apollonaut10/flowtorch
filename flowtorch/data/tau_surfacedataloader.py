@@ -248,7 +248,7 @@ class TAUSurfaceDataloader(Dataloader):
             if isinstance(time, list):
                 return pt.stack(
                     [self._load_single_snapshot(field_name, t) for t in time],
-                    dim=-1
+                    dim=0
                 )
             else:
                 return self._load_single_snapshot(field_name, time)
