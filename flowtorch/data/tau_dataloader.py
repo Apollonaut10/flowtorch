@@ -135,6 +135,11 @@ class TAUConfig(object):
                         name_with_marker = f"{name}_marker{str(int(markers[0]))}"
                         bmap[name_with_marker] = markers
                         logger.warning(f"Duplicate zone name {name} replaced by {name_with_marker}.")
+                        # Replace old markername:
+                        old_markers = bmap[name]
+                        old_name_with_marker = f"{name}_marker{str(int(old_markers[0]))}"
+                        del bmap[name]
+                        bmap[old_name_with_marker] = old_markers                        
                     else:
                         bmap[name] = markers
         return bmap
